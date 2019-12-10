@@ -59,13 +59,24 @@ CREATE TABLE Booking(
 CREATE OR REPLACE VIEW FlightAvailableSeatsView AS
 SELECT flight_id, capacity - booked_seats AS available_seats
 FROM (
-         SELECT F.id AS flight_id, date, capacity, (SELECT COUNT(*) FROM Booking WHERE flight_id=F.id) AS booked_seats
-         FROM Flight F JOIN Spacecraft S ON F.spacecraft_id = S.id
+         SELECT
+            F.id AS flight_id,
+            F.date,
+            S.capacity,
+            COUNT(b.ref_num) AS booked_seats
+         FROM
+              Flight F JOIN Spacecraft S ON F.spacecraft_id = S.id JOIN Booking B ON F.id = B.flight_id
+        GROUP BY
+            f.id, s.id, f.date
      ) T;
+
+
 
 CREATE OR REPLACE VIEW FlightEntityView AS
 SELECT id, date, available_seats, planet_id
-FROM Flight F JOIN FlightAvailableSeatsView S ON F.id = S.flight_id;
+FROM Flight F 
+JOIN FlightAvailableSeatsView S ON F.id = S.flight_id;
+
 
 END;
 $$ LANGUAGE plpgsql;
