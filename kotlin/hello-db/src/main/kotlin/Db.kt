@@ -9,6 +9,7 @@ lateinit var url: String
 lateinit var dataSource: HikariDataSource
 
 fun initDb(user: String = "postgres", password: String = "", database: String = "postgres") {
+  /* Зачем отключать autoCommit? В коде обновления данных базы, нигде вручную commit не стоит */
   url = "jdbc:postgresql://localhost/$database?user=$user&defaultAutoCommit=false&password=$password"
   dataSource = HikariDataSource().apply {
     username = user
@@ -24,6 +25,7 @@ fun <T> withConnection(hikari: Boolean, code: (Connection) -> T) : T {
 
 fun getconn(): Connection {
   return DriverManager.getConnection(url).also {
+    /* Зачем отключать autoCommit? В коде обновления данных базы, нигде вручную commit не стоит */
     it.autoCommit = false
   }
 }

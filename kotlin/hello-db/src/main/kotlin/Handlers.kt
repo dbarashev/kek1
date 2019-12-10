@@ -12,6 +12,7 @@ class PlanetEntity {
   val id: Int? = null
   var name: String? = null
   var distance: BigDecimal? = null
+  /* Почему EAGER? IDEA подсвечивает, что это поле вообще не используется. А загрузка много времени возьмет  */
   @OneToMany(fetch = FetchType.EAGER, mappedBy = "planet")
   var flights: List<FlightEntity>? = null
 }
@@ -40,6 +41,8 @@ class FlightsHandler() {
 
   fun handleDelayFlights(flightDate: Date, interval: String) : String {
     var updateCount = 0
+    /* Для каждого полета, которых 100500 мы пилим запрос в базу? Эдак никакого пула не хватит
+    * Это же все можно одним запросом выразить  */
     cacheFlights(flightDate).forEach { flightId ->
       withConnection(true) {
         updateCount += it.prepareStatement("UPDATE Flight SET date=date + interval '$interval' WHERE id=$flightId")
@@ -51,11 +54,16 @@ class FlightsHandler() {
 
 
   fun handleDeletePlanet(planetId: Int) : String {
-    val deleteCount = withConnection(false) {
+    /*
+    * Почему hikari: false?
+    * Если уж используем пул, разумно использовать везде
+    *  */
+    val deleteCount = withConnection(true) {
       it.prepareStatement("DELETE FROM Planet WHERE id=?").also { stmt ->
         stmt.setInt(1, planetId)
       }.executeUpdate()
     }
+    /* Педантичность: удалилась либо одна, либо ноль -- странно выводить их количество, лучше уж флажок */
     return "Deleted $deleteCount planets"
   }
 
@@ -75,6 +83,20 @@ class FlightsHandler() {
           while (resultSet.next()) {
             val flightId = resultSet.getInt("id")
             if (!this.flightCache.containsKey(flightId)) {
+              /*
+                Что происходит тот тут
+                Мы извлекли полеты
+                Их может быть очень много
+                И для каждого из 100500 полетов снова пилим запрос в базу
+                Она столько за всю жизнь не осилит :с
+                И опять-таки, если пользователь запросил 100500 полетов, мы их все в кеш кладем?
+                Так никакого кеша не хватит
+
+                И опять таки, он же здесь нигде не инвалидируется
+                Там может полетов таких уже давно нет
+
+                Даже если вообще кеширование просто убрать, станет лучше
+               */
               val flightEntity = entityManager.find(FlightEntity::class.java, flightId)
               if (flightEntity != null) {
                 this.flightCache[flightId] = flightEntity
