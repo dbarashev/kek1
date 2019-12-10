@@ -105,7 +105,7 @@ class App(object):
         # Now let's check if we have some cached data, this will speed up performance, kek
         intro = None
         if flight_ids:
-            intro = FlightEntity.select().join(PlanetEntity)
+            intro = FlightEntity.select().join(PlanetEntity).execute()
         for flight_id in flight_ids:
             chached_flight = self.flight_cache.get(flight_id, None)
             if chached_flight is None:
