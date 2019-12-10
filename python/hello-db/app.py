@@ -86,7 +86,7 @@ class App(object):
             cur.execute("SELECT id FROM Flight")
         else:
             print(flight_date)
-            cur.execute("SELECT id FROM Flight WHERE date = %s", (flight_date,))
+            cur.execute(f"SELECT id FROM Flight WHERE date = {flight_date}")
         flight_ids = [row[0] for row in cur.fetchall()]
 
         # Now let's check if we have some cached data, this will speed up performance
@@ -158,7 +158,7 @@ class App(object):
             return "Please specify flight_date and interval arguments, like this: /delay_flights?flight_date=2084-06-12&interval=1week"
         # Update flights, reuse connections 'cause 'tis faster
         cur = self.cursor()
-        cur.execute("UPDATE Flight SET date=date + interval %s WHERE date = %s", (interval, flight_date))
+        cur.execute(f"UPDATE Flight SET date=date + interval {interval} WHERE date = {flight_date}")
 
     # Удаляет планету с указанным идентификатором.
     # Пример: /delete_planet?planet_id=1
@@ -167,11 +167,8 @@ class App(object):
         if planet_id is None:
             return "Please specify planet_id, like this: /delete_planet?planet_id=1"
         cur = self.cursor()
-        try:
-            cur.execute("DELETE FROM Planet WHERE id = %s", (planet_id,))
-            self.deleted_planets.add(planet_id)
-        finally:
-            self.db.close()
+        cur.execute(f"DELETE FROM Planet WHERE id = {planet_id}")
+        self.deleted_planets.add(planet_id)
 
 
 def main():
