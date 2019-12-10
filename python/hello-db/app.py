@@ -8,6 +8,7 @@ import cherrypy
 
 # Драйвер PostgreSQL
 import psycopg2 as pg_driver
+import psycopg2.pool as pool
 
 # ORM
 from peewee import *
@@ -32,8 +33,8 @@ db = PostgresqlDatabase(args.pg_database, user=args.pg_user, host=args.pg_host, 
 # Классы ORM модели
 class PlanetEntity(Model):
     id = PrimaryKeyField()
-    distance = DecimalField()
-    name = TextField()
+    distance = DecimalField([Check('distance > 0.0')])
+    name = TextField(unique=True)
 
     class Meta:
         database = db
@@ -41,14 +42,17 @@ class PlanetEntity(Model):
 
 
 class FlightEntity(Model):
-    id = IntegerField()
+    id = PrimaryKeyField()
     date = DateField()
-    available_seats = IntegerField()
+    available_seats = IntegerField([Check('available_seats > 0')])
     planet = ForeignKeyField(PlanetEntity, related_name='flights')
 
     class Meta:
         database = db
         db_table = "flightentityview"
+
+
+pg_pool = pool.SimpleConnectionPool(1, 100, user=args.pg_user, password=args.pg_password, host=args.pg_host, port=args.pg_port)
 
 
 def getconn():
@@ -69,8 +73,8 @@ class App(object):
     def cache_flights(self, flight_date):
         flight_ids = []  # type: List[int]
 
-        # Just get all needed flight identifiers
-        with getconn() as db:
+        db = pg_pool.getconn()
+        try:
             cur = db.cursor()
             if flight_date is None:
                 cur.execute("SELECT id FROM Flight")
@@ -78,6 +82,8 @@ class App(object):
                 print(flight_date)
                 cur.execute("SELECT id FROM Flight WHERE date = %s", (flight_date,))
             flight_ids = [row[0] for row in cur.fetchall()]
+        finally:
+            pg_pool.putconn(db)
 
         # Now let's check if we have some cached data, this will speed up performance, kek
         for flight_id in flight_ids:
@@ -145,10 +151,13 @@ class App(object):
         flight_ids = self.cache_flights(flight_date)
 
         # Update flights, reuse connections 'cause 'tis faster
-        with getconn() as db:
+        try:
+            db = pg_pool.getconn()
             cur = db.cursor()
             for id in flight_ids:
                 cur.execute("UPDATE Flight SET date=date + interval %s WHERE id=%s", (interval, id))
+        finally:
+            pg_pool.putconn(db)
 
     # Удаляет планету с указанным идентификатором.
     # Пример: /delete_planet?planet_id=1
@@ -156,12 +165,12 @@ class App(object):
     def delete_planet(self, planet_id=None):
         if planet_id is None:
             return "Please specify planet_id, like this: /delete_planet?planet_id=1"
-        db = getconn()
-        cur = db.cursor()
+        db = pg_pool.getconn()
         try:
+            cur = db.cursor()
             cur.execute("DELETE FROM Planet WHERE id = %s", (planet_id,))
         finally:
-            db.close()
+            pg_pool.putconn(db)
 
 
 if __name__ == '__main__':
