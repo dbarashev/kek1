@@ -58,9 +58,34 @@ def getconn():
 @cherrypy.expose
 class App(object):
     flight_cache = ...  # type: Dict[int, FlightEntity]
+    invalid_days = None
+    invalid_planets = None
+    conn = None
 
     def __init__(self):
         self.flight_cache = dict()
+        self.invalid_days = set()
+        self.invalid_planets = set()
+        with getconn() as c:
+            self.conn = c
+
+    def get_cursor(self):
+        try:
+            return self.conn.cursor()
+        except Exception as e:
+            print(e)
+            with getconn() as c:
+                self.conn = c
+            return self.conn.cursor()
+
+    def update_cache(self, intro, flight_id):
+        try:
+            flight = intro.where(FlightEntity.id == flight_id).get()
+            self.flight_cache[flight_id] = flight
+        except Exception as e:
+            print(e)
+            if self.flight_cache.get(flight_id, None) is not None:
+                self.flight_cache.pop(flight_id)
 
     @cherrypy.expose
     def index(self):
@@ -70,23 +95,27 @@ class App(object):
         flight_ids = []  # type: List[int]
 
         # Just get all needed flight identifiers
-        with getconn() as db:
-            cur = db.cursor()
-            if flight_date is None:
-                cur.execute("SELECT id FROM Flight")
-            else:
-                print(flight_date)
-                cur.execute("SELECT id FROM Flight WHERE date = %s", (flight_date,))
-            flight_ids = [row[0] for row in cur.fetchall()]
+        cur = self.get_cursor()
+        if flight_date is None:
+            cur.execute("SELECT id FROM Flight")
+        else:
+            cur.execute("SELECT id FROM Flight WHERE date = %s", (flight_date,))
+        flight_ids = [row[0] for row in cur.fetchall()]
 
         # Now let's check if we have some cached data, this will speed up performance, kek
+        intro = None
+        if flight_ids:
+            intro = FlightEntity.select().join(PlanetEntity)
         for flight_id in flight_ids:
-            if not flight_id in self.flight_cache:
-                # OMG, cache miss! Let's fetch data
-                flight = FlightEntity.select().join(PlanetEntity).where(FlightEntity.id == flight_id).get()
-                if flight is not None:
-                    self.flight_cache[flight_id] = flight
-
+            chached_flight = self.flight_cache.get(flight_id, None)
+            if chached_flight is None:
+                self.update_cache(intro, flight_id)
+            elif chached_flight.planet.id in self.invalid_planets:
+                self.update_cache(intro, flight_id)
+                self.invalid_days.remove(chached_flight.planet.id)
+            elif chached_flight.date in self.invalid_days:
+                self.update_cache(intro, flight_id)
+                self.invalid_days.remove(chached_flight.date)
         return flight_ids
 
     # Отображает таблицу с полетами в указанную дату или со всеми полетами,
@@ -141,14 +170,10 @@ class App(object):
     def delay_flights(self, flight_date=None, interval=None):
         if flight_date is None or interval is None:
             return "Please specify flight_date and interval arguments, like this: /delay_flights?flight_date=2084-06-12&interval=1week"
-        # Make sure flights are cached
-        flight_ids = self.cache_flights(flight_date)
-
-        # Update flights, reuse connections 'cause 'tis faster
-        with getconn() as db:
-            cur = db.cursor()
-            for id in flight_ids:
-                cur.execute("UPDATE Flight SET date=date + interval %s WHERE id=%s", (interval, id))
+        cur = self.get_cursor()
+        cur.execute("UPDATE Flight SET date=date + interval %s WHERE date = %s", (interval, flight_date))
+        self.invalid_days.add(flight_date)
+        self.conn.commit()
 
     # Удаляет планету с указанным идентификатором.
     # Пример: /delete_planet?planet_id=1
@@ -156,12 +181,10 @@ class App(object):
     def delete_planet(self, planet_id=None):
         if planet_id is None:
             return "Please specify planet_id, like this: /delete_planet?planet_id=1"
-        db = getconn()
-        cur = db.cursor()
-        try:
-            cur.execute("DELETE FROM Planet WHERE id = %s", (planet_id,))
-        finally:
-            db.close()
+        cur = self.get_cursor()
+        cur.execute("DELETE FROM Planet WHERE id = %s", (planet_id,))
+        self.invalid_planets.add(planet_id)
+        self.conn.commit()
 
 
 if __name__ == '__main__':
