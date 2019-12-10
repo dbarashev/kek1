@@ -1,7 +1,7 @@
 # encoding: UTF-8
 import argparse
 
-from typing import List, Any, Dict
+from typing import List, Any, Dict, Set
 
 ## Веб сервер
 import cherrypy
@@ -58,17 +58,17 @@ def getconn():
 @cherrypy.expose
 class App(object):
     flight_cache = ...  # type: Dict[int, FlightEntity]
-    deleted_planets = ...  # type: List[int]
+    deleted_planets = ...  # type: Set[int]
 
     def __init__(self):
         self.flight_cache = dict()
-        self.deleted_planets = list()
+        self.deleted_planets = set()
         self.db = None
 
     def cursor(self):
         try:
             return self.db.cursor()
-        except InterfaceError:
+        except:
             with getconn() as db:
                 self.db = db
                 return self.db.cursor()
@@ -169,7 +169,7 @@ class App(object):
         cur = self.cursor()
         try:
             cur.execute("DELETE FROM Planet WHERE id = %s", (planet_id,))
-            self.deleted_planets.append(planet_id)
+            self.deleted_planets.add(planet_id)
         finally:
             self.db.close()
 
