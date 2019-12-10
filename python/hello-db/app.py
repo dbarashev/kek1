@@ -72,18 +72,20 @@ class App(object):
     def get_cursor(self):
         try:
             return self.conn.cursor()
-        except:
+        except Exception as e:
+            print(e)
             with getconn() as c:
                 self.conn = c
             return self.conn.cursor()
 
     def update_cache(self, intro, flight_id):
-        # OMG, cache miss! Let's fetch data
-        flight = intro.where(FlightEntity.id == flight_id).get()
-        if flight is None and self.flight_cache.get(flight_id, None) is not None:
-            self.flight_cache.pop(flight_id)
-        else:
+        try:
+            flight = intro.where(FlightEntity.id == flight_id).get()
             self.flight_cache[flight_id] = flight
+        except Exception as e:
+            print(e)
+            if self.flight_cache.get(flight_id, None) is not None:
+                self.flight_cache.pop(flight_id)
 
     @cherrypy.expose
     def index(self):
