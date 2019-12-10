@@ -1,5 +1,6 @@
 # encoding: UTF-8
 import argparse
+import contextlib
 import sys
 
 from typing import List, Any, Dict
@@ -8,7 +9,6 @@ from typing import List, Any, Dict
 import cherrypy
 
 # Драйвер PostgreSQL
-import psycopg2 as pg_driver
 from psycopg2.pool import SimpleConnectionPool
 
 # ORM
@@ -53,11 +53,16 @@ class FlightEntity(Model):
         db_table = "flightentityview"
 
 
-pool = SimpleConnectionPool(minconn=1, maxconn=10, user=args.pg_user, password=args.pg_password, host=args.pg_host, port=args.pg_port)
+pool = SimpleConnectionPool(minconn=1, maxconn=10, user=args.pg_user, password=args.pg_password, host=args.pg_host, port=args.pg_port, database=args.pg_database)
 
 
+@contextlib.contextmanager
 def getconn():
-    return pool.getconn()
+    conn = pool.getconn()
+    try:
+        yield conn
+    finally:
+        pool.putconn(conn)
 
 
 @cherrypy.expose
@@ -139,11 +144,9 @@ class App(object):
         # Make sure flights are cached
         flights = self.get_flights_for_date(flight_date)
 
-        # Update flights, reuse connections 'cause 'tis faster
         with getconn() as db:
             cur = db.cursor()
             for f in flights:
-                """TODO:: Upsert"""
                 cur.execute("UPDATE Flight SET date=date + interval %s WHERE id=%s", (interval, f.id))
 
     # Удаляет планету с указанным идентификатором.
@@ -152,13 +155,9 @@ class App(object):
     def delete_planet(self, planet_id=None):
         if planet_id is None:
             return "Please specify planet_id, like this: /delete_planet?planet_id=1"
-        db = getconn()
-        """TODO: do not closing connections"""
-        cur = db.cursor()
-        try:
-            cur.execute("DELETE FROM Planet WHERE id = %s", (planet_id,))
-        finally:
-            db.close()
+        with getconn() as db:
+            cur = db.cursor()
+            cur.execute("DELETE FROM Planet WHERE id = %s", (int(planet_id),))
 
 
 if __name__ == '__main__':
