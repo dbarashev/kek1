@@ -173,6 +173,7 @@ class App(object):
         cur = self.get_cursor()
         cur.execute("UPDATE Flight SET date=date + interval %s WHERE date = %s", (interval, flight_date))
         self.invalid_days.add(flight_date)
+        self.conn.commit()
 
     # Удаляет планету с указанным идентификатором.
     # Пример: /delete_planet?planet_id=1
@@ -183,6 +184,7 @@ class App(object):
         cur = self.get_cursor()
         cur.execute("DELETE FROM Planet WHERE id = %s", (planet_id,))
         self.invalid_planets.add(planet_id)
+        self.conn.commit()
 
 
 if __name__ == '__main__':
