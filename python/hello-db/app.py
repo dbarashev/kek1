@@ -9,6 +9,7 @@ import cherrypy
 
 # Драйвер PostgreSQL
 import psycopg2 as pg_driver
+from psycopg2.pool import SimpleConnectionPool
 
 # ORM
 from peewee import *
@@ -52,8 +53,11 @@ class FlightEntity(Model):
         db_table = "flightentityview"
 
 
+pool = SimpleConnectionPool(minconn=1, maxconn=10, user=args.pg_user, password=args.pg_password, host=args.pg_host, port=args.pg_port)
+
+
 def getconn():
-    return pg_driver.connect(user=args.pg_user, password=args.pg_password, host=args.pg_host, port=args.pg_port)
+    return pool.getconn()
 
 
 @cherrypy.expose
@@ -74,13 +78,7 @@ class App(object):
     @cherrypy.expose
     def flights(self, flight_date=None):
         # Let's cache the flights we need
-        flights = FlightEntity.select()
-        if flight_date is not None:
-            flights = flights.where(FlightEntity.date == flight_date)
-
-        flights = flights.join(PlanetEntity)
-        # типа логированние в дебаг режиме
-        data = flights.execute()
+        data = self.get_flights_for_date(flight_date)
 
         # Okeyla, now let's format the result HTML
 
@@ -106,9 +104,9 @@ class App(object):
         result = [header]
         for flight in data:
             result.append('<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>'.format(flight.id, flight.date,
-                                                                                          flight.planet.name,
-                                                                                          flight.planet.id)
-                           )
+                                                                                         flight.planet.name,
+                                                                                         flight.planet.id)
+                          )
 
         footer = """
         </table>
@@ -117,6 +115,16 @@ class App(object):
         result.append(footer)
         cherrypy.response.headers['Content-Type'] = 'text/html; charset=utf-8'
         return ''.join(result)
+
+    def get_flights_for_date(self, flight_date):
+        flights = FlightEntity.select()
+        if flight_date is not None:
+            flights = flights.where(FlightEntity.date == flight_date)
+        flights = flights.join(PlanetEntity)
+        # типа логированние в дебаг режиме
+        print(flights.sql(), file=sys.stderr)
+        data = flights.execute()
+        return data
 
     # Сдвигает полёты, начинающиеся в указанную дату на указанный интервал.
     # Формат даты: yyyy-MM-dd (например 2019-12-19)
@@ -129,14 +137,14 @@ class App(object):
         if flight_date is None or interval is None:
             return "Please specify flight_date and interval arguments, like this: /delay_flights?flight_date=2084-06-12&interval=1week"
         # Make sure flights are cached
-        flight_ids = self.cache_flights(flight_date)
+        flights = self.get_flights_for_date(flight_date)
 
         # Update flights, reuse connections 'cause 'tis faster
         with getconn() as db:
             cur = db.cursor()
-            for id in flight_ids:
+            for f in flights:
                 """TODO:: Upsert"""
-                cur.execute("UPDATE Flight SET date=date + interval %s WHERE id=%s", (interval, id))
+                cur.execute("UPDATE Flight SET date=date + interval %s WHERE id=%s", (interval, f.id))
 
     # Удаляет планету с указанным идентификатором.
     # Пример: /delete_planet?planet_id=1
