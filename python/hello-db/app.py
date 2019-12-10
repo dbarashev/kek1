@@ -79,6 +79,10 @@ class App(object):
     #         /flights
     @cherrypy.expose
     def flights(self, flight_date=None):
+        # Полётов может быть очень много, когда у нас уже есть БД для их хранения.
+        # К тому же, данные в кэше могут оказаться вдруг неактуальными.
+        # Также проще получить сразу все данные из view, чем сначала получать id'шники.
+
         flights = None
         if not flight_date:
             flights = FlightEntity.select().join(PlanetEntity).execute()
@@ -127,7 +131,7 @@ class App(object):
         if flight_date is None or interval is None:
             return "Please specify flight_date and interval arguments, like this: /delay_flights?flight_date=2084-06-12&interval=1week"
 
-        # Update flights, reuse connections 'cause 'tis faster
+        # Можно всё сделать в одном запросе.
         with get_conn() as conn:
             conn.cursor().execute("UPDATE Flight SET date=date + interval %s WHERE date=%s", (interval, flight_date))
 
