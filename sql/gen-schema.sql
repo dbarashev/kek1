@@ -76,7 +76,7 @@ CREATE OR REPLACE VIEW FlightEntityView AS
 SELECT id, date, available_seats, planet_id
 FROM Flight F 
 JOIN FlightAvailableSeatsView S ON F.id = S.flight_id;
-;
+
 
 END;
 $$ LANGUAGE plpgsql;

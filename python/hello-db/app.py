@@ -1,5 +1,6 @@
 # encoding: UTF-8
 import argparse
+import sys
 
 from typing import List, Any, Dict
 
@@ -57,7 +58,6 @@ def getconn():
 
 @cherrypy.expose
 class App(object):
-    flight_cache = ...  # type: Dict[int, FlightEntity]
 
     def __init__(self):
         self.flight_cache = dict()
@@ -65,29 +65,6 @@ class App(object):
     @cherrypy.expose
     def index(self):
         return "Привет. Тебе интересно сходить на /flights, /delete_planet или /delay_flights"
-
-    def cache_flights(self, flight_date):
-        flight_ids = []  # type: List[int]
-
-        # Just get all needed flight identifiers
-        with getconn() as db:
-            cur = db.cursor()
-            if flight_date is None:
-                cur.execute("SELECT id FROM Flight")
-            else:
-                print(flight_date)
-                cur.execute("SELECT id FROM Flight WHERE date = %s", (flight_date,))
-            flight_ids = [row[0] for row in cur.fetchall()]
-
-        # Now let's check if we have some cached data, this will speed up performance, kek
-        for flight_id in flight_ids:
-            if not flight_id in self.flight_cache:
-                # OMG, cache miss! Let's fetch data
-                flight = FlightEntity.select().join(PlanetEntity).where(FlightEntity.id == flight_id).get()
-                if flight is not None:
-                    self.flight_cache[flight_id] = flight
-
-        return flight_ids
 
     # Отображает таблицу с полетами в указанную дату или со всеми полетами,
     # если дата не указана
@@ -97,10 +74,17 @@ class App(object):
     @cherrypy.expose
     def flights(self, flight_date=None):
         # Let's cache the flights we need
-        flight_ids = self.cache_flights(flight_date)
+        flights = FlightEntity.select()
+        if flight_date is not None:
+            flights = flights.where(FlightEntity.date == flight_date)
+
+        flights = flights.join(PlanetEntity)
+        # типа логированние в дебаг режиме
+        data = flights.execute()
 
         # Okeyla, now let's format the result HTML
-        result_text = """
+
+        header = """
         <html>
         <body>
         <style>
@@ -119,17 +103,20 @@ class App(object):
         <table>
             <tr><th>Flight ID</th><th>Date</th><th>Planet</th><th>Planet ID</th></tr>
         """
-        for flight_id in flight_ids:
-            flight = self.flight_cache[flight_id]
-            result_text += '<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>'.format(flight.id, flight.date,
+        result = [header]
+        for flight in data:
+            result.append('<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>'.format(flight.id, flight.date,
                                                                                           flight.planet.name,
                                                                                           flight.planet.id)
-        result_text += """
+                           )
+
+        footer = """
         </table>
         </body>
         </html>"""
+        result.append(footer)
         cherrypy.response.headers['Content-Type'] = 'text/html; charset=utf-8'
-        return result_text
+        return ''.join(result)
 
     # Сдвигает полёты, начинающиеся в указанную дату на указанный интервал.
     # Формат даты: yyyy-MM-dd (например 2019-12-19)
@@ -148,6 +135,7 @@ class App(object):
         with getconn() as db:
             cur = db.cursor()
             for id in flight_ids:
+                """TODO:: Upsert"""
                 cur.execute("UPDATE Flight SET date=date + interval %s WHERE id=%s", (interval, id))
 
     # Удаляет планету с указанным идентификатором.
@@ -157,6 +145,7 @@ class App(object):
         if planet_id is None:
             return "Please specify planet_id, like this: /delete_planet?planet_id=1"
         db = getconn()
+        """TODO: do not closing connections"""
         cur = db.cursor()
         try:
             cur.execute("DELETE FROM Planet WHERE id = %s", (planet_id,))
