@@ -80,7 +80,10 @@ class App(object):
     def update_cache(self, intro, flight_id):
         # OMG, cache miss! Let's fetch data
         flight = intro.where(FlightEntity.id == flight_id).get()
-        self.flight_cache[flight_id] = flight
+        if flight is None and self.flight_cache.get(flight_id, None) is not None:
+            self.flight_cache.pop(flight_id)
+        else:
+            self.flight_cache[flight_id] = flight
 
     @cherrypy.expose
     def index(self):
