@@ -28,13 +28,15 @@ parser.add_argument('--pg-database', help='PostgreSQL database', default='postgr
 args = parser.parse_args()
 
 db = PostgresqlDatabase(args.pg_database, user=args.pg_user, host=args.pg_host, password=args.pg_password)
+pg_pool = pool.SimpleConnectionPool(1, 100, user=args.pg_user, host=args.pg_host, password=args.pg_password)
 
 
 # Классы ORM модели
 class PlanetEntity(Model):
     id = PrimaryKeyField()
-    distance = DecimalField([Check('distance > 0.0')])
-    name = TextField(unique=True)
+    distance = DecimalField()
+    name = TextField(unique=True)  # 4. Передадим параметр unique=True для документировать. Чтобы можно было
+                                   # узнать об уникальности поля, глядя на ORM-модель.
 
     class Meta:
         database = db
@@ -44,56 +46,25 @@ class PlanetEntity(Model):
 class FlightEntity(Model):
     id = PrimaryKeyField()
     date = DateField()
-    available_seats = IntegerField([Check('available_seats > 0')])
     planet = ForeignKeyField(PlanetEntity, related_name='flights')
 
     class Meta:
         database = db
-        db_table = "flightentityview"
-
-
-pg_pool = pool.SimpleConnectionPool(1, 100, user=args.pg_user, password=args.pg_password, host=args.pg_host, port=args.pg_port)
-
-
-def getconn():
-    return pg_driver.connect(user=args.pg_user, password=args.pg_password, host=args.pg_host, port=args.pg_port)
+        db_table = "flight"  # 1. вместо представления FlightEntityView будем отображать таблицу FlightEntity.
+                             # В представлении FlightEntityView есть JOIN FlightAvailableSeatsView, в котором
+                             # в свою очередь есть JOIN Spacecraft. Это лишняя работа по отношению к запросу,
+                             # выполняемому в обработчике flights
 
 
 @cherrypy.expose
 class App(object):
-    flight_cache = ...  # type: Dict[int, FlightEntity]
 
     def __init__(self):
-        self.flight_cache = dict()
+        pass
 
     @cherrypy.expose
     def index(self):
         return "Привет. Тебе интересно сходить на /flights, /delete_planet или /delay_flights"
-
-    def cache_flights(self, flight_date):
-        flight_ids = []  # type: List[int]
-
-        db = pg_pool.getconn()
-        try:
-            cur = db.cursor()
-            if flight_date is None:
-                cur.execute("SELECT id FROM Flight")
-            else:
-                print(flight_date)
-                cur.execute("SELECT id FROM Flight WHERE date = %s", (flight_date,))
-            flight_ids = [row[0] for row in cur.fetchall()]
-        finally:
-            pg_pool.putconn(db)
-
-        # Now let's check if we have some cached data, this will speed up performance, kek
-        for flight_id in flight_ids:
-            if not flight_id in self.flight_cache:
-                # OMG, cache miss! Let's fetch data
-                flight = FlightEntity.select().join(PlanetEntity).where(FlightEntity.id == flight_id).get()
-                if flight is not None:
-                    self.flight_cache[flight_id] = flight
-
-        return flight_ids
 
     # Отображает таблицу с полетами в указанную дату или со всеми полетами,
     # если дата не указана
@@ -102,9 +73,9 @@ class App(object):
     #         /flights
     @cherrypy.expose
     def flights(self, flight_date=None):
-        # Let's cache the flights we need
-        flight_ids = self.cache_flights(flight_date)
-
+        # 3. Кэширование удалено. Во-первых, кэш может забить всю оперативную память.
+        # Во-вторых, в коде баг: если информация о полёте будет обновлена, кэш об
+        # этом не узнает.
         # Okeyla, now let's format the result HTML
         result_text = """
         <html>
@@ -125,11 +96,24 @@ class App(object):
         <table>
             <tr><th>Flight ID</th><th>Date</th><th>Planet</th><th>Planet ID</th></tr>
         """
-        for flight_id in flight_ids:
-            flight = self.flight_cache[flight_id]
-            result_text += '<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>'.format(flight.id, flight.date,
-                                                                                          flight.planet.name,
-                                                                                          flight.planet.id)
+        query = (FlightEntity
+                 .select(
+            FlightEntity.id,
+            FlightEntity.date,
+            PlanetEntity.name,
+            PlanetEntity.id.alias('planet_id')
+        ).join(PlanetEntity))
+
+        if flight_date is not None:
+            query = query.where(FlightEntity.date == flight_date)
+
+        for flight_id, flight_date, planet_name, planet_id  in query.namedtuples():
+            # 5. XSS-уязвимость. Если окажется, что какая-то из планет называется
+            # <script>alert('Boo!')</script>, то этот код будет исполнен на
+            # стороне клиента
+            result_text += '<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>'.format(flight_id, flight_date,
+                                                                                          planet_name,
+                                                                                          planet_id)
         result_text += """
         </table>
         </body>
@@ -147,15 +131,17 @@ class App(object):
     def delay_flights(self, flight_date=None, interval=None):
         if flight_date is None or interval is None:
             return "Please specify flight_date and interval arguments, like this: /delay_flights?flight_date=2084-06-12&interval=1week"
-        # Make sure flights are cached
-        flight_ids = self.cache_flights(flight_date)
 
         # Update flights, reuse connections 'cause 'tis faster
+        # 2. В комментарии выше заявлено, что здесь переиспользовались соединения, но это не так.
+        # Чтобы переиспользовать сессии, воспользуемся пулом соединений базы данных, это позволит
+        # и не выполнять на каждый запрос такую дорогую операцию как открытие соединений. Также
+        # будем использовать пулом соединений в обработчике delete_planet.
+        db = pg_pool.getconn()
+        db.autocommit = True
         try:
-            db = pg_pool.getconn()
             cur = db.cursor()
-            for id in flight_ids:
-                cur.execute("UPDATE Flight SET date=date + interval %s WHERE id=%s", (interval, id))
+            cur.execute("UPDATE Flight SET date=date + interval %s WHERE date=%s", (interval, flight_date))
         finally:
             pg_pool.putconn(db)
 
@@ -166,6 +152,7 @@ class App(object):
         if planet_id is None:
             return "Please specify planet_id, like this: /delete_planet?planet_id=1"
         db = pg_pool.getconn()
+        db.autocommit = True
         try:
             cur = db.cursor()
             cur.execute("DELETE FROM Planet WHERE id = %s", (planet_id,))
