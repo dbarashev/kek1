@@ -56,17 +56,12 @@ CREATE TABLE Booking(
   pax_id INT REFERENCES Pax,
   flight_id INT REFERENCES Flight ON DELETE SET NULL);
 
-CREATE OR REPLACE VIEW FlightAvailableSeatsView AS
-SELECT flight_id, capacity - booked_seats AS available_seats
+CREATE OR REPLACE VIEW FlightEntityView  AS
+SELECT T.fl_id as id, date, planet_id, capacity - COUNT(flight_id) AS available_seats
 FROM (
-         SELECT F.id AS flight_id, date, capacity, (SELECT COUNT(*) FROM Booking WHERE flight_id=F.id) AS booked_seats
+         SELECT F.id AS fl_id, date, capacity, planet_id
          FROM Flight F JOIN Spacecraft S ON F.spacecraft_id = S.id
-     ) T;
-
-CREATE OR REPLACE VIEW FlightEntityView AS
-SELECT id, date, available_seats, planet_id
-FROM Flight F JOIN FlightAvailableSeatsView S ON F.id = S.flight_id;
-
+     ) T LEFT JOIN Booking B ON T.fl_id = B.flight_id GROUP BY T.fl_id, date, planet_id, capacity;
 END;
 $$ LANGUAGE plpgsql;
 
