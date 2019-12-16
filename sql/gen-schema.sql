@@ -59,7 +59,7 @@ CREATE TABLE Booking(
 CREATE OR REPLACE VIEW FlightAvailableSeatsView AS
 SELECT flight_id, capacity - booked_seats AS available_seats
 FROM (
-         SELECT F.id AS flight_id, date, capacity, (SELECT COUNT(*) FROM Booking WHERE flight_id=F.id) AS booked_seats
+         SELECT F.id AS flight_id, capacity, (SELECT COUNT(*) FROM Booking WHERE flight_id=F.id) AS booked_seats
          FROM Flight F JOIN Spacecraft S ON F.spacecraft_id = S.id
      ) T;
 

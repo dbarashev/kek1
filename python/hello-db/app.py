@@ -60,7 +60,7 @@ class App(object):
     flight_cache = ...  # type: Dict[int, FlightEntity]
 
     def __init__(self):
-        self.flight_cache = dict()
+        self.flight_cache = {}
 
     @cherrypy.expose
     def index(self):
@@ -72,19 +72,19 @@ class App(object):
         # Just get all needed flight identifiers
         with getconn() as db:
             cur = db.cursor()
-            if flight_date is None:
+            if not flight_date:
                 cur.execute("SELECT id FROM Flight")
             else:
                 print(flight_date)
                 cur.execute("SELECT id FROM Flight WHERE date = %s", (flight_date,))
-            flight_ids = [row[0] for row in cur.fetchall()]
+            flight_ids = [row[0] for row in cur]
 
         # Now let's check if we have some cached data, this will speed up performance, kek
         for flight_id in flight_ids:
-            if not flight_id in self.flight_cache:
+            if flight_id not in self.flight_cache:
                 # OMG, cache miss! Let's fetch data
                 flight = FlightEntity.select().join(PlanetEntity).where(FlightEntity.id == flight_id).get()
-                if flight is not None:
+                if flight:
                     self.flight_cache[flight_id] = flight
 
         return flight_ids
@@ -140,7 +140,8 @@ class App(object):
     @cherrypy.expose
     def delay_flights(self, flight_date=None, interval=None):
         if flight_date is None or interval is None:
-            return "Please specify flight_date and interval arguments, like this: /delay_flights?flight_date=2084-06-12&interval=1week"
+            return "Please specify flight_date and interval arguments, like this: " \
+                   "/delay_flights?flight_date=2084-06-12&interval=1week "
         # Make sure flights are cached
         flight_ids = self.cache_flights(flight_date)
 
@@ -148,7 +149,8 @@ class App(object):
         with getconn() as db:
             cur = db.cursor()
             for id in flight_ids:
-                cur.execute("UPDATE Flight SET date=date + interval %s WHERE id=%s", (interval, id))
+                cur.execute("UPDATE Flight SET date=date + interval %s WHERE id=%s RETURNING date", (interval, id))
+                self.flight_cache[id].date = cur.fetchone()[0]
 
     # Удаляет планету с указанным идентификатором.
     # Пример: /delete_planet?planet_id=1
@@ -159,7 +161,15 @@ class App(object):
         db = getconn()
         cur = db.cursor()
         try:
-            cur.execute("DELETE FROM Planet WHERE id = %s", (planet_id,))
+            cur.execute("""
+            DELETE FROM Planet 
+            WHERE "id"={planet_id}
+            RETURNING (SELECT ARRAY_AGG("id") FROM Flight WHERE planet_id={planet_id})
+            """.format(planet_id=planet_id))
+            db.commit()
+            for flight_id in cur.fetchone()[0]:
+                if flight_id in self.flight_cache:
+                    self.flight_cache.pop(flight_id)
         finally:
             db.close()
 
