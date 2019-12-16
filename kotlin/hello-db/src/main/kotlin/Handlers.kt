@@ -1,92 +1,96 @@
 package hellodb
 
 import java.math.BigDecimal
+import java.time.LocalDate
 import java.util.*
 import javax.persistence.*
+import javax.persistence.criteria.CriteriaQuery
+import javax.persistence.criteria.Fetch
+import javax.persistence.criteria.Root
 
 
 @Entity(name = "planet")
-class PlanetEntity {
-  @Id
-  @GeneratedValue(strategy = GenerationType.IDENTITY)
-  val id: Int? = null
-  var name: String? = null
-  var distance: BigDecimal? = null
-  @OneToMany(fetch = FetchType.EAGER, mappedBy = "planet")
-  var flights: List<FlightEntity>? = null
+open class PlanetEntity {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    val id: Int? = null
+    var name: String? = null
+    var distance: BigDecimal? = null
 }
 
-@Entity(name = "flightentityview")
-class FlightEntity {
-  @Id
-  var id: Int? = null
-  var date: Date? = null
-  @ManyToOne(fetch = FetchType.LAZY)
-  @JoinColumn(name = "planet_id")
-  var planet: PlanetEntity? = null
+@Entity(name = "flight")
+open class FlightEntity {
+    @Id
+    var id: Int? = null
+    var date: Date? = null
+    @ManyToOne
+    @JoinColumn(name = "planet_id")
+    var planet: PlanetEntity? = null
 }
 
+@Suppress("JpaQlInspection")
 class FlightsHandler() {
-  private val flightCache = mutableMapOf<Int, FlightEntity>()
-  private val emf = Persistence.createEntityManagerFactory("Postgres")
-  private val entityManager = emf.createEntityManager()
+    private val emf = Persistence.createEntityManagerFactory("Postgres")
 
-  fun handleFlights(flightDate: Date?) : String {
-    val tablebody = cacheFlights(flightDate).map { flightCache[it] }.filterNotNull().map {
-      """<tr><td>${it.id}</td><td>${it.date}</td><td>${it.planet?.name}</td><td>${it.planet?.id}</td></tr>"""
-    }.joinToString(separator = "\n")
-    return "$FLIGHTS_HEADER $tablebody $FLIGHTS_FOOTER"
-  }
-
-  fun handleDelayFlights(flightDate: Date, interval: String) : String {
-    var updateCount = 0
-    cacheFlights(flightDate).forEach { flightId ->
-      withConnection(true) {
-        updateCount += it.prepareStatement("UPDATE Flight SET date=date + interval '$interval' WHERE id=$flightId")
-            .executeUpdate()
-      }
+    fun handleFlights(flightDate: Date?): String {
+        val tablebody = withinTransaction {
+            getFlights(flightDate, it)
+        }!!.map {
+            """<tr><td>${it.id}</td><td>${it.date}</td><td>${it.planet?.name}</td><td>${it.planet?.id}</td></tr>"""
+        }.joinToString(separator = "\n")
+        return "$FLIGHTS_HEADER $tablebody $FLIGHTS_FOOTER"
     }
-    return "Updated $updateCount flights"
-  }
 
+    private fun getFlights(flightDate: Date?, entityManager: EntityManager): List<FlightEntity> {
+        val cb = entityManager.criteriaBuilder
+        val flightCriteria: CriteriaQuery<FlightEntity> = cb.createQuery(FlightEntity::class.java)
+        val flightRoot: Root<FlightEntity> = flightCriteria.from(FlightEntity::class.java)
+        @Suppress("UNUSED_VARIABLE") val fetch: Fetch<FlightEntity, PlanetEntity> = flightRoot.fetch("planet")
+        flightCriteria.select(flightRoot)
 
-  fun handleDeletePlanet(planetId: Int) : String {
-    val deleteCount = withConnection(false) {
-      it.prepareStatement("DELETE FROM Planet WHERE id=?").also { stmt ->
-        stmt.setInt(1, planetId)
-      }.executeUpdate()
-    }
-    return "Deleted $deleteCount planets"
-  }
-
-
-
-  private fun cacheFlights(flightDate: Date?) : List<Int> {
-    val flightIds = mutableListOf<Int>()
-    withConnection(true) {
-      if (flightDate == null) {
-        it.prepareStatement("SELECT id FROM Flight")
-      } else {
-        it.prepareStatement("SELECT id FROM Flight WHERE date=?").also {stmt ->
-          stmt.setDate(1, java.sql.Date(flightDate.time))
+        if (flightDate != null) {
+            val dateProperty = flightRoot.get<LocalDate>("date")
+            flightCriteria.where(cb.equal(dateProperty, flightDate))
         }
-      }.use {
-        it.executeQuery().use {resultSet ->
-          while (resultSet.next()) {
-            val flightId = resultSet.getInt("id")
-            if (!this.flightCache.containsKey(flightId)) {
-              val flightEntity = entityManager.find(FlightEntity::class.java, flightId)
-              if (flightEntity != null) {
-                this.flightCache[flightId] = flightEntity
-              }
-            }
-            flightIds.add(flightId)
-          }
-        }
-      }
+        return entityManager.createQuery(flightCriteria).resultList
     }
-    return flightIds
-  }
+
+    fun handleDelayFlights(flightDate: Date, interval: Int): String {
+        val c = Calendar.getInstance()
+        c.time = flightDate
+        c.add(Calendar.DAY_OF_MONTH, interval)
+        val updateCount = withinTransaction {
+            it.createQuery("UPDATE flight f SET f.date=:newDate WHERE f.date=:initDate")
+                    .setParameter("initDate", flightDate)
+                    .setParameter("newDate", c.time)
+                    .executeUpdate()
+        }!!
+
+        return "Updated $updateCount flights"
+    }
+
+    fun handleDeletePlanet(planetId: Int): String {
+        return withinTransaction {
+            val entityCount = it.createQuery("DELETE FROM planet p WHERE p.id = :id")
+                    .setParameter("id", planetId)
+                    .executeUpdate()
+            "Deleted $entityCount planets"
+        }!!
+    }
+
+    private fun <T> withinTransaction(code: (EntityManager) -> T?): T? {
+        val entityManager = emf.createEntityManager()
+        val tx = entityManager.transaction
+        tx.begin()
+        try {
+            return code(entityManager)?.also { tx.commit() }
+        } catch (e: Exception) {
+            tx.rollback()
+            throw RuntimeException(e)
+        } finally {
+            entityManager.close()
+        }
+    }
 }
 
 private const val FLIGHTS_HEADER = """
