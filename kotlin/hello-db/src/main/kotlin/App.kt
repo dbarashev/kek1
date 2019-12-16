@@ -49,6 +49,6 @@ class App() {
 }
 
 fun main(args: Array<String>) {
-  initDb(user = "postgres", password="", database = "postgres")
+  initDb(user = "postgres", password="12345", database = "postgres")
   App()
 }

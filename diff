@@ -1,0 +1,170 @@
+diff --git a/README.md b/README.md
+index ebf5e3e..fa63fc4 100644
+--- a/README.md
++++ b/README.md
+@@ -20,3 +20,7 @@ python3 app.py
+ cd kotlin/hello-db
+ gradle run
+ ```
++
++Избавился от кэша, т.к. он использовался только при delayFlights и то неправильно. Поменял
++withConnection, т.к. уже есть пул, зачем создавать новые. Также поменял схему, заменил
++2 view на один, убрал внутренний select count, т.к. это долго. Hibernate в целом оставил.
+diff --git a/kotlin/hello-db/src/main/kotlin/App.kt b/kotlin/hello-db/src/main/kotlin/App.kt
+index e65bd7f..f750fcf 100644
+--- a/kotlin/hello-db/src/main/kotlin/App.kt
++++ b/kotlin/hello-db/src/main/kotlin/App.kt
+@@ -49,6 +49,6 @@ class App() {
+ }
+ 
+ fun main(args: Array<String>) {
+-  initDb(user = "postgres", password="", database = "postgres")
++  initDb(user = "postgres", password="12345", database = "postgres")
+   App()
+ }
+diff --git a/kotlin/hello-db/src/main/kotlin/Db.kt b/kotlin/hello-db/src/main/kotlin/Db.kt
+index 530b136..f8268cd 100644
+--- a/kotlin/hello-db/src/main/kotlin/Db.kt
++++ b/kotlin/hello-db/src/main/kotlin/Db.kt
+@@ -8,7 +8,7 @@ import java.sql.DriverManager
+ lateinit var url: String
+ lateinit var dataSource: HikariDataSource
+ 
+-fun initDb(user: String = "postgres", password: String = "", database: String = "postgres") {
++fun initDb(user: String = "postgres", password: String = "12345", database: String = "postgres") {
+   url = "jdbc:postgresql://localhost/$database?user=$user&defaultAutoCommit=false&password=$password"
+   dataSource = HikariDataSource().apply {
+     username = user
+@@ -18,12 +18,6 @@ fun initDb(user: String = "postgres", password: String = "", database: String =
+   }
+ }
+ 
+-fun <T> withConnection(hikari: Boolean, code: (Connection) -> T) : T {
+-  return if (hikari) dataSource.connection.use(code) else code(getconn())
+-}
+-
+-fun getconn(): Connection {
+-  return DriverManager.getConnection(url).also {
+-    it.autoCommit = false
+-  }
++fun <T> withConnection(code: (Connection) -> T) : T {
++  return dataSource.connection.use(code)
+ }
+diff --git a/kotlin/hello-db/src/main/kotlin/Handlers.kt b/kotlin/hello-db/src/main/kotlin/Handlers.kt
+index a5d44f9..c74cadf 100644
+--- a/kotlin/hello-db/src/main/kotlin/Handlers.kt
++++ b/kotlin/hello-db/src/main/kotlin/Handlers.kt
+@@ -27,43 +27,40 @@ class FlightEntity {
+ }
+ 
+ class FlightsHandler() {
+-  private val flightCache = mutableMapOf<Int, FlightEntity>()
+   private val emf = Persistence.createEntityManagerFactory("Postgres")
+   private val entityManager = emf.createEntityManager()
+ 
+   fun handleFlights(flightDate: Date?) : String {
+-    val tablebody = cacheFlights(flightDate).map { flightCache[it] }.filterNotNull().map {
++    val tablebody = getFlights(flightDate).joinToString(separator = "\n") {
+       """<tr><td>${it.id}</td><td>${it.date}</td><td>${it.planet?.name}</td><td>${it.planet?.id}</td></tr>"""
+-    }.joinToString(separator = "\n")
++    }
+     return "$FLIGHTS_HEADER $tablebody $FLIGHTS_FOOTER"
+   }
+ 
+   fun handleDelayFlights(flightDate: Date, interval: String) : String {
+     var updateCount = 0
+-    cacheFlights(flightDate).forEach { flightId ->
+-      withConnection(true) {
+-        updateCount += it.prepareStatement("UPDATE Flight SET date=date + interval '$interval' WHERE id=$flightId")
+-            .executeUpdate()
+-      }
++    withConnection {
++      updateCount += it.prepareStatement("UPDATE Flight SET date=date + interval '$interval'")
++          .executeUpdate()
+     }
+     return "Updated $updateCount flights"
+   }
+ 
+ 
+   fun handleDeletePlanet(planetId: Int) : String {
+-    val deleteCount = withConnection(false) {
++    withConnection {
+       it.prepareStatement("DELETE FROM Planet WHERE id=?").also { stmt ->
+         stmt.setInt(1, planetId)
+       }.executeUpdate()
+     }
+-    return "Deleted $deleteCount planets"
++    return "Deleted one planet"
+   }
+ 
+ 
+ 
+-  private fun cacheFlights(flightDate: Date?) : List<Int> {
+-    val flightIds = mutableListOf<Int>()
+-    withConnection(true) {
++  private fun getFlights(flightDate: Date?) : List<FlightEntity> {
++    val flightEntities = mutableListOf<FlightEntity>()
++    withConnection {
+       if (flightDate == null) {
+         it.prepareStatement("SELECT id FROM Flight")
+       } else {
+@@ -74,18 +71,13 @@ class FlightsHandler() {
+         it.executeQuery().use {resultSet ->
+           while (resultSet.next()) {
+             val flightId = resultSet.getInt("id")
+-            if (!this.flightCache.containsKey(flightId)) {
+-              val flightEntity = entityManager.find(FlightEntity::class.java, flightId)
+-              if (flightEntity != null) {
+-                this.flightCache[flightId] = flightEntity
+-              }
+-            }
+-            flightIds.add(flightId)
++            val flightEntity = entityManager.find(FlightEntity::class.java, flightId)
++            flightEntities.add(flightEntity)
+           }
+         }
+       }
+     }
+-    return flightIds
++    return flightEntities
+   }
+ }
+ 
+diff --git a/kotlin/hello-db/src/main/resources/META-INF/persistence.xml b/kotlin/hello-db/src/main/resources/META-INF/persistence.xml
+index b9c98e6..4605ed6 100644
+--- a/kotlin/hello-db/src/main/resources/META-INF/persistence.xml
++++ b/kotlin/hello-db/src/main/resources/META-INF/persistence.xml
+@@ -9,6 +9,7 @@
+       <!-- Configuring JDBC properties -->
+       <property name="javax.persistence.jdbc.url" value="jdbc:postgresql://127.0.0.1:5432/postgres" />
+       <property name="javax.persistence.jdbc.user" value="postgres" />
++      <property name="javax.persistence.jdbc.password" value="12345" />
+       <property name="javax.persistence.jdbc.driver" value="org.postgresql.Driver" />
+       <property name="hibernate.dialect" value="org.hibernate.dialect.PostgreSQL9Dialect" />
+ 
+diff --git a/sql/gen-schema.sql b/sql/gen-schema.sql
+index 1c8dc90..4addc05 100644
+--- a/sql/gen-schema.sql
++++ b/sql/gen-schema.sql
+@@ -56,17 +56,12 @@ CREATE TABLE Booking(
+   pax_id INT REFERENCES Pax,
+   flight_id INT REFERENCES Flight ON DELETE SET NULL);
+ 
+-CREATE OR REPLACE VIEW FlightAvailableSeatsView AS
+-SELECT flight_id, capacity - booked_seats AS available_seats
++CREATE OR REPLACE VIEW FlightEntityView  AS
++SELECT T.fl_id as id, date, planet_id, capacity - COUNT(flight_id) AS available_seats
+ FROM (
+-         SELECT F.id AS flight_id, date, capacity, (SELECT COUNT(*) FROM Booking WHERE flight_id=F.id) AS booked_seats
++         SELECT F.id AS fl_id, date, capacity, planet_id
+          FROM Flight F JOIN Spacecraft S ON F.spacecraft_id = S.id
+-     ) T;
+-
+-CREATE OR REPLACE VIEW FlightEntityView AS
+-SELECT id, date, available_seats, planet_id
+-FROM Flight F JOIN FlightAvailableSeatsView S ON F.id = S.flight_id;
+-
++     ) T LEFT JOIN Booking B ON T.fl_id = B.flight_id GROUP BY T.fl_id, date, planet_id, capacity;
+ END;
+ $$ LANGUAGE plpgsql;
+ 

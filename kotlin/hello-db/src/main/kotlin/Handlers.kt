@@ -27,43 +27,40 @@ class FlightEntity {
 }
 
 class FlightsHandler() {
-  private val flightCache = mutableMapOf<Int, FlightEntity>()
   private val emf = Persistence.createEntityManagerFactory("Postgres")
   private val entityManager = emf.createEntityManager()
 
   fun handleFlights(flightDate: Date?) : String {
-    val tablebody = cacheFlights(flightDate).map { flightCache[it] }.filterNotNull().map {
+    val tablebody = getFlights(flightDate).joinToString(separator = "\n") {
       """<tr><td>${it.id}</td><td>${it.date}</td><td>${it.planet?.name}</td><td>${it.planet?.id}</td></tr>"""
-    }.joinToString(separator = "\n")
+    }
     return "$FLIGHTS_HEADER $tablebody $FLIGHTS_FOOTER"
   }
 
   fun handleDelayFlights(flightDate: Date, interval: String) : String {
     var updateCount = 0
-    cacheFlights(flightDate).forEach { flightId ->
-      withConnection(true) {
-        updateCount += it.prepareStatement("UPDATE Flight SET date=date + interval '$interval' WHERE id=$flightId")
-            .executeUpdate()
-      }
+    withConnection {
+      updateCount += it.prepareStatement("UPDATE Flight SET date=date + interval '$interval'")
+          .executeUpdate()
     }
     return "Updated $updateCount flights"
   }
 
 
   fun handleDeletePlanet(planetId: Int) : String {
-    val deleteCount = withConnection(false) {
+    withConnection {
       it.prepareStatement("DELETE FROM Planet WHERE id=?").also { stmt ->
         stmt.setInt(1, planetId)
       }.executeUpdate()
     }
-    return "Deleted $deleteCount planets"
+    return "Deleted one planet"
   }
 
 
 
-  private fun cacheFlights(flightDate: Date?) : List<Int> {
-    val flightIds = mutableListOf<Int>()
-    withConnection(true) {
+  private fun getFlights(flightDate: Date?) : List<FlightEntity> {
+    val flightEntities = mutableListOf<FlightEntity>()
+    withConnection {
       if (flightDate == null) {
         it.prepareStatement("SELECT id FROM Flight")
       } else {
@@ -74,18 +71,13 @@ class FlightsHandler() {
         it.executeQuery().use {resultSet ->
           while (resultSet.next()) {
             val flightId = resultSet.getInt("id")
-            if (!this.flightCache.containsKey(flightId)) {
-              val flightEntity = entityManager.find(FlightEntity::class.java, flightId)
-              if (flightEntity != null) {
-                this.flightCache[flightId] = flightEntity
-              }
-            }
-            flightIds.add(flightId)
+            val flightEntity = entityManager.find(FlightEntity::class.java, flightId)
+            flightEntities.add(flightEntity)
           }
         }
       }
     }
-    return flightIds
+    return flightEntities
   }
 }
 
