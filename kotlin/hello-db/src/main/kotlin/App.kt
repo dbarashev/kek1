@@ -19,7 +19,7 @@ class App() {
       "Hello DB"
     }
     get("/flights") { req, res ->
-      res.header("Content-type", "text/html;charset=utf-8");
+      res.header("Content-type", "text/html;charset=utf-8")
       val flightDate: Date? = req.queryParams("flight_date")?.let {
         SimpleDateFormat("yyyy-MM-dd").parse(it)
       }
@@ -31,9 +31,9 @@ class App() {
       }
       val interval: String ? = req.queryParams("interval")
       if (flightDate == null || interval == null) {
-        "Please specify flight_date and interval arguments, like this: /delay_flights?flight_date=2084-06-12&interval=1week"
+        "Please specify flight_date and interval (in days) arguments, like this: /delay_flights?flight_date=2084-06-12&interval=7"
       } else {
-        handler.handleDelayFlights(flightDate, interval)
+        handler.handleDelayFlights(flightDate, interval.toInt())
       }
     }
     get("/delete_planet") { req, res ->
@@ -49,6 +49,5 @@ class App() {
 }
 
 fun main(args: Array<String>) {
-  initDb(user = "postgres", password="", database = "postgres")
   App()
 }
