@@ -21,7 +21,7 @@ parser = argparse.ArgumentParser(description='Hello DB web application')
 parser.add_argument('--pg-host', help='PostgreSQL host name', default='localhost')
 parser.add_argument('--pg-port', help='PostgreSQL port', default=5432)
 parser.add_argument('--pg-user', help='PostgreSQL user', default='postgres')
-parser.add_argument('--pg-password', help='PostgreSQL password', default='')
+parser.add_argument('--pg-password', help='PostgreSQL password', default='postgres')
 parser.add_argument('--pg-database', help='PostgreSQL database', default='postgres')
 
 args = parser.parse_args()
@@ -66,28 +66,22 @@ class App(object):
     def index(self):
         return "Привет. Тебе интересно сходить на /flights, /delete_planet или /delay_flights"
 
-    def cache_flights(self, flight_date):
+    def get_flights(self, flight_date):
         flight_ids = []  # type: List[int]
 
         # Just get all needed flight identifiers
         with getconn() as db:
             cur = db.cursor()
             if flight_date is None:
-                cur.execute("SELECT id FROM Flight")
+                cur.execute("select F.id, F.date, P.name, P.id from flight F join planet P on P.id = F.planet_id;")
             else:
                 print(flight_date)
-                cur.execute("SELECT id FROM Flight WHERE date = %s", (flight_date,))
-            flight_ids = [row[0] for row in cur.fetchall()]
+                cur.execute("""select F.id, F.date, P.name, P.id from 
+                    flight F join planet P on P.id = F.planet_id where F.date = '{}'""".format(flight_date))
+            
+            flights = cur.fetchall()
 
-        # Now let's check if we have some cached data, this will speed up performance, kek
-        for flight_id in flight_ids:
-            if not flight_id in self.flight_cache:
-                # OMG, cache miss! Let's fetch data
-                flight = FlightEntity.select().join(PlanetEntity).where(FlightEntity.id == flight_id).get()
-                if flight is not None:
-                    self.flight_cache[flight_id] = flight
-
-        return flight_ids
+            return flights
 
     # Отображает таблицу с полетами в указанную дату или со всеми полетами,
     # если дата не указана
@@ -97,7 +91,7 @@ class App(object):
     @cherrypy.expose
     def flights(self, flight_date=None):
         # Let's cache the flights we need
-        flight_ids = self.cache_flights(flight_date)
+        flights = self.get_flights(flight_date)
 
         # Okeyla, now let's format the result HTML
         result_text = """
@@ -119,11 +113,10 @@ class App(object):
         <table>
             <tr><th>Flight ID</th><th>Date</th><th>Planet</th><th>Planet ID</th></tr>
         """
-        for flight_id in flight_ids:
-            flight = self.flight_cache[flight_id]
-            result_text += '<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>'.format(flight.id, flight.date,
-                                                                                          flight.planet.name,
-                                                                                          flight.planet.id)
+        for flight in flights:
+            result_text += '<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>'.format(flight[0], flight[1],
+                                                                                          flight[2],
+                                                                                          flight[3])
         result_text += """
         </table>
         </body>
@@ -141,14 +134,11 @@ class App(object):
     def delay_flights(self, flight_date=None, interval=None):
         if flight_date is None or interval is None:
             return "Please specify flight_date and interval arguments, like this: /delay_flights?flight_date=2084-06-12&interval=1week"
-        # Make sure flights are cached
-        flight_ids = self.cache_flights(flight_date)
-
-        # Update flights, reuse connections 'cause 'tis faster
         with getconn() as db:
             cur = db.cursor()
-            for id in flight_ids:
-                cur.execute("UPDATE Flight SET date=date + interval %s WHERE id=%s", (interval, id))
+            querry1 = """update flight Flight SET date=date + interval '{}' where Flight.date = '{}'""".format(interval, flight_date)
+            cur.execute(querry1)
+            return cur.statusmessage
 
     # Удаляет планету с указанным идентификатором.
     # Пример: /delete_planet?planet_id=1
@@ -160,6 +150,7 @@ class App(object):
         cur = db.cursor()
         try:
             cur.execute("DELETE FROM Planet WHERE id = %s", (planet_id,))
+            return cur.statusmessage
         finally:
             db.close()
 
